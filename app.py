@@ -1,48 +1,32 @@
 from flask import Flask, render_template, request, jsonify
-import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
 import joblib
+import os
 
 app = Flask(__name__)
 
 # --------------------------
-# Always retrain fresh model
+# Load pre-trained model
 # --------------------------
-def load_and_train():
-    df = pd.read_csv('crop_prediction.csv')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    # Encode categorical variables
-    season_encoder = LabelEncoder()
-    label_encoder = LabelEncoder()
+model = joblib.load(os.path.join(BASE_DIR, "model.pkl"))
+season_encoder = joblib.load(os.path.join(BASE_DIR, "season_encoder.pkl"))
+label_encoder = joblib.load(os.path.join(BASE_DIR, "label_encoder.pkl"))
 
-    df['season_encoded'] = season_encoder.fit_transform(df['season'])
-    df['label_encoded'] = label_encoder.fit_transform(df['label'])
-
-    # Features and target
-    X = df[['temperature', 'humidity', 'ph', 'water availability', 'season_encoded']]
-    y = df['label_encoded']
-
-    # Train model
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-
-    return season_encoder, label_encoder, model
-
-# ⚡ Train model fresh on every run
-season_encoder, label_encoder, model = load_and_train()
-
+# --------------------------
+# Routes
+# --------------------------
 @app.route('/')
 def index():
     return render_template('index.html')
+
 
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         data = request.get_json()
+
         temperature = float(data['temperature'])
         humidity = float(data['humidity'])
         ph = float(data['ph'])
@@ -52,14 +36,14 @@ def predict():
         # Encode season
         season_encoded = season_encoder.transform([season])[0]
 
-        # Features
+        # Prepare features
         features = np.array([[temperature, humidity, ph, water_availability, season_encoded]])
 
         # Prediction
         prediction_encoded = model.predict(features)[0]
         confidence = np.max(model.predict_proba(features)) * 100
 
-        # Decode
+        # Decode crop name
         crop = label_encoder.inverse_transform([prediction_encoded])[0]
 
         return jsonify({
@@ -74,6 +58,7 @@ def predict():
             'error': str(e)
         })
 
+
 @app.route('/season_info/<season>')
 def season_info(season):
     info = {
@@ -82,10 +67,16 @@ def season_info(season):
         'summer': 'Summer season is hot and dry, ideal for crops like watermelon, muskmelon, and cotton.',
         'spring': 'Spring season has moderate temperatures, good for kidney beans and balanced-climate crops.'
     }
+
     return jsonify({
         'season': season,
         'info': info.get(season, 'No information available for this season.')
     })
 
+
+# --------------------------
+# Main (Render compatible)
+# --------------------------
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
